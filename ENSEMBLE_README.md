@@ -49,17 +49,6 @@ Hansen & Salamon (1990) showed that ensemble accuracy depends on:
 2. **Model Diversity**: Errors should be uncorrelated between classifiers
 3. **Ensemble Size**: Larger ensembles generally improve performance (with diminishing returns)
 
-### Cybersecurity-Specific Research
-
-#### Ensemble Methods in Intrusion Detection
-Research shows 10-25% improvement in detection accuracy:
-
-| Study | Method | Improvement | Application |
-|-------|--------|-------------|-------------|
-| Almgren et al. (2000) | Voting Ensembles | +15% F1 | Anomaly Detection |
-| Wang et al. (2010) | Stacked Classifiers | +20% TPR | DDoS Classification |
-| Zhao et al. (2019) | Deep Ensembles | +12% AUC | APT Detection |
-
 #### Multi-Modal Threat Intelligence
 Our approach combines:
 - **Semantic Embeddings**: ATTACK-BERT contextual understanding
@@ -446,7 +435,7 @@ delivery   0.52      0.58        +11%          0.089
 
 ### Implementation References
 - [Attacking-BERT: A BERT-based Approach to Mitigate Cyber Attacks](https://arxiv.org/abs/2111.02703)
-- [Kill Chain Modeling for Cyber Threat Intelligence](https://www.lockheedmartin.com/en-us/capabilities/cyber/cyber-kill-chain.html)
+- [KillChainGraph: ML Framework for Predicting and Mapping ATT&CK Techniques](https://arxiv.org/abs/2508.18230)
 
 ---
 
