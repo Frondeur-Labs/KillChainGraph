@@ -178,13 +178,73 @@ def load_phase_models(
     return models
 
 
+# ============================
+# Ensemble model loading
+# ============================
+def load_ensemble_phase_models(
+    model_root,
+    phase_names=None,
+    models_per_phase=2,
+    input_dim=None,
+    emb_map_filename="technique_embeddings.pkl",
+):
+    """
+    Load multiple model variants per phase for ensemble prediction.
+    For demonstration, we load the same model multiple times.
+    In practice, load different model architectures (Transformer, LightGBM, etc.).
+
+    Args:
+        model_root (str): root folder that contains phase subfolders.
+        phase_names (list[str], optional): list of phase names to load.
+        models_per_phase (int): number of model variants to load per phase.
+        input_dim (int, optional): embedding input dimension.
+        emb_map_filename (str): filename for embeddings.
+
+    Returns:
+        dict: { phase: [(model1, le), (model2, le), ...] }
+    """
+    if phase_names is None:
+        phase_names = [
+            "recon",
+            "weapon",
+            "delivery",
+            "exploit",
+            "install",
+            "c2",
+            "objectives",
+        ]
+
+    ensemble_models = {}
+    for phase in phase_names:
+        models_list = []
+        for i in range(models_per_phase):
+            # For demo, load the same model multiple times
+            # In production, load different model types or trained variants
+            try:
+                model, label_encoder = load_phase_model(
+                    phase,
+                    model_root=model_root,
+                    input_dim=input_dim,
+                    emb_map_filename=emb_map_filename,
+                )
+                models_list.append((model, label_encoder))
+            except Exception as e:
+                print(f"Could not load model {i} for phase {phase}: {e}")
+                break
+        if models_list:
+            ensemble_models[phase] = models_list
+
+    return ensemble_models
+
+
 # -------------------------
 # Example / quick test (run as script)
 # -------------------------
 if __name__ == "__main__":
     # Example usage. Adjust model_root to match your repo layout.
-    example_model_root = "./transformer_model_killchain"  # adjust as needed
-    print("Attempting to load all phase models from:", example_model_root)
+    example_model_root = "../transformer_model_killchain"  # adjust as needed
+
+    print("Attempting to load single phase models from:", example_model_root)
     try:
         models = load_phase_models(example_model_root)
         for phase, (m, le) in models.items():
@@ -192,7 +252,15 @@ if __name__ == "__main__":
                 f"- Loaded phase '{phase}': model={type(m).__name__}, classes={len(le.classes_)}"
             )
     except Exception as e:
-        print("Error loading models:", e)
+        print("Error loading single models:", e)
         print(
-            "If error is 'input_dim not provided', either provide input_dim to load_phase_models or place technique_embeddings.pkl under model_root."
+            "If error is 'input_dim not provided', either provide input_dim to load_phase_models or place technique_embeddings.pkl at model_root."
         )
+
+    print("\nAttempting to load ensemble models (2 per phase):")
+    try:
+        ensemble_models = load_ensemble_phase_models(example_model_root, models_per_phase=2)
+        for phase, models_list in ensemble_models.items():
+            print(f"- Phase '{phase}': {len(models_list)} models loaded")
+    except Exception as e:
+        print("Error loading ensemble models:", e)
