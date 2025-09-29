@@ -7,8 +7,9 @@ import pandas as pd
 from sentence_transformers import SentenceTransformer
 
 # 🔹 Import utils
-from utils.load_models import load_phase_models
-from utils.prediction import run_kill_chain_prediction
+from utils.load_models import load_phase_models, load_ensemble_phase_models
+from utils.prediction import run_kill_chain_prediction, run_ensemble_kill_chain_prediction
+from utils.ensemble import create_voting_ensemble, create_weighted_ensemble, create_stacking_ensemble
 from utils.linkage import (
     build_technique_embedding_dict,
     build_phase_linkages,
@@ -56,24 +57,86 @@ def load_all():
     return sentence_model, phase_models, emb_map, technique_df
 
 
+@st.cache_resource(show_spinner=False)
+def load_ensemble_all():
+    """Load ensemble models for all phases."""
+    progress = st.progress(0, text="🔄 Initializing Ensemble Models...")
+
+    # Step 1 - Load ATTACK-BERT
+    progress.progress(20, text="📥 Loading ATTACK-BERT model...")
+    sentence_model = SentenceTransformer("basel/ATTACK-BERT")
+
+    # Step 2 - Load ensemble phase-specific models (2 models per phase)
+    progress.progress(50, text="⚙️ Loading ensemble transformer models...")
+    ensemble_phase_models = load_ensemble_phase_models("transformer_model_killchain", models_per_phase=2)
+
+    # Step 3 - Load technique embeddings
+    progress.progress(75, text="🧠 Loading technique embeddings...")
+    emb_map = build_technique_embedding_dict(
+        "transformer_model_killchain/technique_embeddings.pkl"
+    )
+
+    # Step 4 - Load Name ↔ ID mapping
+    progress.progress(95, text="📊 Loading MITRE technique mapping...")
+    technique_df = pd.read_csv("data/attack_techniques.csv")
+
+    progress.progress(100, text="✅ All ensemble models loaded successfully!")
+
+    return sentence_model, ensemble_phase_models, emb_map, technique_df
+
+
 # -------------------------
 # Input Section
 # -------------------------
+col1, col2 = st.columns(2)
+with col1:
+    ensemble_mode = st.checkbox("Enable Ensemble Mode", help="Combine predictions from multiple models for better accuracy")
+with col2:
+    ensemble_type = st.selectbox(
+        "Ensemble Type",
+        ["Soft Voting", "Weighted Averaging", "Stacking"],
+        disabled=not ensemble_mode,
+        help="Choose ensemble combination method"
+    ) if ensemble_mode else None
+
 attack_input = st.text_area("Paste the full attack plan below:", height=300)
 
 if st.button("Run Prediction and Mapping"):
     if not attack_input.strip():
         st.warning("⚠️ Please paste an attack plan before running.")
     else:
-        sentence_model, phase_models, technique_embeddings, technique_df = load_all()
+        # Load appropriate models based on ensemble mode
+        if ensemble_mode:
+            st.info("🤖 Using Ensemble Mode for improved predictions")
+            sentence_model, ensemble_phase_models, technique_embeddings, technique_df = load_ensemble_all()
 
-        # -------------------------
-        # 1. Run predictions
-        # -------------------------
-        with st.spinner("⏳ Running phase-wise technique predictions..."):
-            predicted_techniques = run_kill_chain_prediction(
-                attack_input, phase_models, sentence_model, k=10
-            )
+            # Create ensemble predictor based on type
+            if ensemble_type == "Soft Voting":
+                ensemble_predictor = create_voting_ensemble("soft")
+            elif ensemble_type == "Weighted Averaging":
+                ensemble_predictor = create_weighted_ensemble()
+            elif ensemble_type == "Stacking":
+                ensemble_predictor = create_stacking_ensemble()
+            else:
+                ensemble_predictor = create_voting_ensemble("soft")
+
+            # ------------------------- -------
+            # 1. Run ensemble predictions
+            # -------------------------
+            with st.spinner("🤖 Running ensemble phase-wise technique predictions..."):
+                predicted_techniques = run_ensemble_kill_chain_prediction(
+                    attack_input, ensemble_phase_models, sentence_model, ensemble_predictor, k=10
+                )
+        else:
+            sentence_model, phase_models, technique_embeddings, technique_df = load_all()
+
+            # ------------------------- -------
+            # 1. Run single-model predictions
+            # -------------------------
+            with st.spinner("⏳ Running phase-wise technique predictions..."):
+                predicted_techniques = run_kill_chain_prediction(
+                    attack_input, phase_models, sentence_model, k=10
+                )
 
         # st.success("✅ Technique prediction completed.")
         # st.subheader("📋 Top Predicted Techniques per Phase")

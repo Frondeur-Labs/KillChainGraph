@@ -86,6 +86,43 @@ def run_kill_chain_prediction(
 
 
 # ==============================
+# Ensemble prediction for kill chain
+# ==============================
+def run_ensemble_kill_chain_prediction(
+    text: str,
+    phase_models_dict: Dict[str, List[Tuple[torch.nn.Module, LabelEncoder]]],
+    sentence_model: SentenceTransformer,
+    ensemble_predictor,
+    k: int = 3,
+) -> Dict[str, List[Tuple[str, float]]]:
+    """
+    Run ensemble technique prediction across all kill chain phases.
+    Args:
+        text (str): full attack description text
+        phase_models_dict (dict): { phase: [(model1, label_encoder1), (model2, label_encoder2), ...] }
+        sentence_model (SentenceTransformer): embedding model (ATTACK-BERT)
+        ensemble_predictor: EnsemblePredictor instance
+        k (int): top-k techniques to return per phase
+    Returns:
+        Dict[str, List[Tuple[str, float]]]: Ensemble combined predictions
+    """
+    # Encode once
+    text_vec = encode_with_attack_bert(text, sentence_model)
+
+    # Get predictions from each model per phase
+    phase_predictions = {}
+    for phase, models_list in phase_models_dict.items():
+        model_predictions = []
+        for model, le in models_list:
+            preds = predict_topk_for_phase(phase, model, le, text_vec, k=k)
+            model_predictions.append(preds)
+        phase_predictions[phase] = model_predictions
+
+    # Apply ensemble combination
+    return ensemble_predictor.predict_kill_chain(phase_predictions)
+
+
+# ==============================
 # Debug / test
 # ==============================
 if __name__ == "__main__":
