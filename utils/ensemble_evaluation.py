@@ -45,6 +45,78 @@ def create_test_dataset() -> List[Tuple[str, Dict[str, str]]]:
     return test_cases
 
 
+def _improvement_indicator(value: float) -> str:
+    """Return a colored indicator based on improvement value."""
+    if value > 0:
+        return "🟢"
+    if value < 0:
+        return "🔴"
+    return "🟡"
+
+
+def _evaluate_single_model(test_data, single_models) -> Dict:
+    """Evaluate single-model baseline and return metrics dict."""
+    sentence_model = SentenceTransformer("basel/ATTACK-BERT")
+    single_accuracy = {phase: [] for phase in single_models.keys()}
+
+    for attack_text, true_techniques in test_data:
+        preds = run_kill_chain_prediction(attack_text, single_models, sentence_model, k=10)
+        for phase, true_tech in true_techniques.items():
+            if phase in preds:
+                techs = [tech for tech, _ in preds[phase][:3]]
+                single_accuracy[phase].append(1.0 if true_tech in techs else 0.0)
+
+    metrics = {}
+    for phase in single_models.keys():
+        acc = np.mean(single_accuracy[phase]) if single_accuracy[phase] else 0.0
+        metrics[phase] = {'single_model_accuracy': acc, 'ensemble_accuracy': acc, 'improvement': 0.0}
+
+    overall_acc = np.mean([m['single_model_accuracy'] for m in metrics.values()])
+    metrics['overall'] = {
+        'single_model_accuracy': overall_acc,
+        'ensemble_accuracy': overall_acc,
+        'improvement': 0.0,
+    }
+    return metrics
+
+
+def _print_overall_summary(results: Dict) -> None:
+    """Print the overall strategy comparison summary."""
+    baseline = results["single_model"]["overall"]
+    print(f"Baseline (Single Model): Accuracy={baseline['single_model_accuracy']:.3f}")
+
+    for strategy in ["voting_soft", "voting_hard", "weighted_avg", "stacking"]:
+        if strategy not in results:
+            continue
+        data = results[strategy]["overall"]
+        improvement = data.get("improvement_over_single", 0)
+        color = _improvement_indicator(improvement)
+        print(f"{strategy.replace('_', ' ').title()}: {color} Accuracy={data['ensemble_accuracy']:.3f} (Improvement:{improvement:+.3f})")
+
+
+def _print_phase_analysis(results: Dict, phases) -> None:
+    """Print phase-by-phase improvement analysis."""
+    print("\n📊 PHASE-BY-PHASE IMPROVEMENT ANALYSIS")
+    print("-" * 50)
+
+    for phase in phases:
+        baseline_acc = results["single_model"][phase]["single_model_accuracy"]
+        best_improvement = 0
+        best_strategy = "single_model"
+
+        for strategy in ["voting_soft", "voting_hard", "weighted_avg", "stacking"]:
+            if strategy not in results:
+                continue
+            ensemble_acc = results[strategy][phase]["ensemble_accuracy"]
+            improvement = ensemble_acc - baseline_acc
+            if improvement > best_improvement:
+                best_improvement = improvement
+                best_strategy = strategy
+
+        color = _improvement_indicator(best_improvement)
+        print(f"{phase.capitalize()}: {color} Best +{best_improvement:.3f} ({best_strategy})")
+
+
 def run_comprehensive_evaluation(model_root: str = "../transformer_model_killchain", output_file: str = "ensemble_results.json"):
     """
     Run comprehensive evaluation of ensemble methods vs single model baseline.
@@ -87,33 +159,8 @@ def run_comprehensive_evaluation(model_root: str = "../transformer_model_killcha
             print(f"  Testing {strategy_name}...")
 
             if strategy_name == "single_model":
-                # Use single models for comparison
-                from prediction import run_kill_chain_prediction
-                from sentence_transformers import SentenceTransformer
-                sentence_model = SentenceTransformer("basel/ATTACK-BERT")
-                single_accuracy = {phase: [] for phase in single_models.keys()}
-
-                for attack_text, true_techniques in test_data:
-                    preds = run_kill_chain_prediction(attack_text, single_models, sentence_model, k=10)
-                    for phase, true_tech in true_techniques.items():
-                        if phase in preds:
-                            techs = [tech for tech, _ in preds[phase][:3]]
-                            single_accuracy[phase].append(1.0 if true_tech in techs else 0.0)
-
-                # Calculate averages
-                metrics = {}
-                for phase in single_models.keys():
-                    acc = np.mean(single_accuracy[phase]) if single_accuracy[phase] else 0.0
-                    metrics[phase] = {'single_model_accuracy': acc, 'ensemble_accuracy': acc, 'improvement': 0.0}
-
-                overall_acc = np.mean([m['single_model_accuracy'] for m in metrics.values()])
-                metrics['overall'] = {
-                    'single_model_accuracy': overall_acc,
-                    'ensemble_accuracy': overall_acc,
-                    'improvement': 0.0
-                }
+                metrics = _evaluate_single_model(test_data, single_models)
             else:
-                # For ensemble strategies, use only ensemble models for both
                 metrics = evaluate_ensemble_performance(
                     test_data, ensemble_models, ensemble_models, ensemble_predictor
                 )
@@ -121,17 +168,16 @@ def run_comprehensive_evaluation(model_root: str = "../transformer_model_killcha
             results[strategy_name] = metrics
 
         # Calculate ensemble improvements
-        baseline_accuracy = results["single_model"]["overall"]["ensemble_accuracy"]  # This is actually single model accuracy when called with single models
+        baseline_accuracy = results["single_model"]["overall"]["ensemble_accuracy"]
 
         for strategy_name in ["voting_soft", "voting_hard", "weighted_avg", "stacking"]:
-            if strategy_name in results:
-                ensemble_acc = results[strategy_name]["overall"]["ensemble_accuracy"]
-                improvement = ensemble_acc - baseline_accuracy
-                results[strategy_name]["overall"]["improvement_over_single"] = improvement
+            if strategy_name not in results:
+                continue
+            ensemble_acc = results[strategy_name]["overall"]["ensemble_accuracy"]
+            results[strategy_name]["overall"]["improvement_over_single"] = ensemble_acc - baseline_accuracy
 
-        # Save results - already imported at top
+        # Save results
         with open(output_file, 'w') as f:
-            # Convert numpy types to native Python types
             json_results = json.loads(json.dumps(results, default=str))
             json.dump(json_results, f, indent=2)
 
@@ -140,39 +186,8 @@ def run_comprehensive_evaluation(model_root: str = "../transformer_model_killcha
         # Pretty print summary
         print("\n📈 ENSEMBLE EVALUATION SUMMARY")
         print("=" * 50)
-
-        baseline = results["single_model"]["overall"]
-        print(".3f")
-
-        for strategy in ["voting_soft", "voting_hard", "weighted_avg", "stacking"]:
-            if strategy in results:
-                data = results[strategy]["overall"]
-                improvement = data.get("improvement_over_single", 0)
-                color = "🟢" if improvement > 0 else "🔴" if improvement < 0 else "🟡"
-                print(f"{strategy.replace('_', ' ').title()}: {color} Accuracy={data['ensemble_accuracy']:.3f} (Improvement:{improvement:+.3f})")
-
-        # Phase-by-phase improvement analysis
-        print("\n📊 PHASE-BY-PHASE IMPROVEMENT ANALYSIS")
-        print("-" * 50)
-
-        best_phase_improvements = {}
-        for phase in single_models.keys():
-            baseline_acc = results["single_model"][phase]["single_model_accuracy"]
-            best_improvement = 0
-            best_strategy = "single_model"
-
-            for strategy in ["voting_soft", "voting_hard", "weighted_avg", "stacking"]:
-                if strategy in results:
-                    ensemble_acc = results[strategy][phase]["ensemble_accuracy"]
-                    improvement = ensemble_acc - baseline_acc
-                    if improvement > best_improvement:
-                        best_improvement = improvement
-                        best_strategy = strategy
-
-            best_phase_improvements[phase] = (best_improvement, best_strategy)
-
-            color = "🟢" if best_improvement > 0 else "🔴" if best_improvement < 0 else "🟡"
-            print(f"{phase.capitalize()}: {color} Best +{best_improvement:.3f} ({best_strategy})")
+        _print_overall_summary(results)
+        _print_phase_analysis(results, single_models.keys())
 
         return results
 

@@ -6,6 +6,8 @@ import pickle
 import torch
 import torch.nn as nn
 
+_DEFAULT_EMB_FILENAME = "technique_embeddings.pkl"
+
 
 # -------------------------
 # Architecture: SimpleTransformerClassifier
@@ -34,7 +36,7 @@ class SimpleTransformerClassifier(nn.Module):
 # Utilities for loading models + encoders
 # -------------------------
 def _infer_input_dim_from_embeddings(
-    model_root, emb_filename="technique_embeddings.pkl"
+    model_root, emb_filename=_DEFAULT_EMB_FILENAME
 ):
     """
     Try to infer the embedding dimensionality by loading a sample vector
@@ -71,7 +73,7 @@ def _load_state_dict(model_path):
 
 
 def load_phase_model(
-    phase_name, model_root, input_dim=None, emb_map_filename="technique_embeddings.pkl"
+    phase_name, model_root, input_dim=None, emb_map_filename=_DEFAULT_EMB_FILENAME
 ):
     """
     Load a single phase's model and its label encoder.
@@ -137,7 +139,7 @@ def load_phase_models(
     model_root,
     phase_names=None,
     input_dim=None,
-    emb_map_filename="technique_embeddings.pkl",
+    emb_map_filename=_DEFAULT_EMB_FILENAME,
 ):
     """
     Load multiple phase models.
@@ -186,7 +188,7 @@ def load_ensemble_phase_models(
     phase_names=None,
     models_per_phase=2,
     input_dim=None,
-    emb_map_filename="technique_embeddings.pkl",
+    emb_map_filename=_DEFAULT_EMB_FILENAME,
 ):
     """
     Load multiple model variants per phase for ensemble prediction.

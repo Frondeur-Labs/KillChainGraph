@@ -32,6 +32,21 @@ def build_technique_embedding_dict(
 # 2. Phase linkages via cosine similarity
 # -------------------------
 
+def _compute_phase_pair_edges(src_phase, tgt_phase, predicted_dict, emb_map, sim_threshold):
+    """Compute similarity edges between all technique pairs of two adjacent phases."""
+    local_edges = []
+    for src_tech, _ in predicted_dict[src_phase]:
+        for tgt_tech, _ in predicted_dict[tgt_phase]:
+            emb_a = emb_map.get((src_phase, src_tech))
+            emb_b = emb_map.get((tgt_phase, tgt_tech))
+            if emb_a is None or emb_b is None:
+                continue
+            sim = float(cosine_similarity([emb_a], [emb_b])[0][0])
+            if sim >= sim_threshold:
+                local_edges.append((src_phase, src_tech, tgt_phase, tgt_tech, sim))
+    return local_edges
+
+
 def build_phase_linkages(predicted_dict, emb_map, sim_threshold=0.01, top_k_edges=None):
     """
     Build semantic edges between predicted techniques across phases.
@@ -51,24 +66,11 @@ def build_phase_linkages(predicted_dict, emb_map, sim_threshold=0.01, top_k_edge
 
     for i in range(len(phase_order) - 1):
         src_phase, tgt_phase = phase_order[i], phase_order[i + 1]
-        local_edges = []
-
-        for src_tech, _ in predicted_dict[src_phase]:
-            for tgt_tech, _ in predicted_dict[tgt_phase]:
-                emb_a = emb_map.get((src_phase, src_tech))
-                emb_b = emb_map.get((tgt_phase, tgt_tech))
-                if emb_a is not None and emb_b is not None:
-                    sim = float(cosine_similarity([emb_a], [emb_b])[0][0])
-                    if sim >= sim_threshold:
-                        local_edges.append(
-                            (src_phase, src_tech, tgt_phase, tgt_tech, sim)
-                        )
+        local_edges = _compute_phase_pair_edges(src_phase, tgt_phase, predicted_dict, emb_map, sim_threshold)
 
         # keep only top-k if requested
         if top_k_edges is not None:
-            local_edges = sorted(local_edges, key=lambda x: x[4], reverse=True)[
-                :top_k_edges
-            ]
+            local_edges = sorted(local_edges, key=lambda x: x[4], reverse=True)[:top_k_edges]
 
         edges.extend(local_edges)
 

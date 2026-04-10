@@ -43,7 +43,7 @@
   cursor: pointer; }
 
 .plugin-clear_button.single .clear-button {
-  right: calc(8px - 6px +  2rem); }
+  right: calc(8px - 6px + 2rem); }
 
 .plugin-clear_button.focus.has-items .clear-button,
 .plugin-clear_button:hover.has-items .clear-button {
@@ -158,7 +158,7 @@
   font-family: inherit;
   font-size: 13px;
   line-height: 18px;
-  font-smoothing: inherit; }
+  -webkit-font-smoothing: inherit; }
 
 .ts-control,
 .ts-wrapper.single.input-active .ts-control {
@@ -316,7 +316,7 @@
   overflow-y: auto;
   overflow-x: hidden;
   max-height: 200px;
-  overflow-scrolling: touch;
+  -webkit-overflow-scrolling: touch;
   scroll-behavior: smooth; }
 
 .ts-hidden-accessible {

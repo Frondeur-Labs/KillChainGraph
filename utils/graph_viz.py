@@ -29,6 +29,103 @@ def _lighten_color(hex_color, factor=0.6):
     return f"#{r:02x}{g:02x}{b:02x}"
 
 
+def _build_name_to_id(technique_df):
+    """Build Name → ID mapping from technique dataframe."""
+    if technique_df is None:
+        return {}
+    if "Name" in technique_df.columns and "ID" in technique_df.columns:
+        return {row["Name"]: row["ID"] for _, row in technique_df.iterrows()}
+    return {}
+
+
+def _add_technique_nodes(net, predicted_dict, phase_positions, name_to_id, x_spacing, y_spacing):
+    """Add technique nodes to the network graph. Returns phase_top_nodes mapping."""
+    phase_top_nodes = {}
+    for phase, techniques in predicted_dict.items():
+        if not techniques:
+            continue
+
+        x = phase_positions.get(phase, len(phase_positions)) * x_spacing
+        top_tech = max(techniques, key=lambda t: t[1])[0]
+        base_color = _phase_color(phase)
+        light_color = _lighten_color(base_color, factor=0.6)
+
+        for idx, (tech_name, score) in enumerate(techniques):
+            node_id = f"{phase}:{tech_name}"
+            tech_id = name_to_id.get(tech_name, "N/A")
+            net.add_node(
+                node_id,
+                label=tech_name if len(tech_name) <= 28 else tech_name[:25] + "...",
+                title=f"Technique: {tech_name} | Phase: {phase} | Prob: {score:.4f} | ID: {tech_id}",
+                color=base_color if tech_name == top_tech else light_color,
+                x=x, y=idx * y_spacing, size=25, physics=False,
+                font={"size": 14, "face": "Arial"},
+            )
+            if idx == 0:
+                phase_top_nodes[phase] = node_id
+
+    return phase_top_nodes
+
+
+def _add_header_nodes(net, phase_positions, phase_top_nodes, x_spacing):
+    """Add phase header nodes and invisible edges to top technique nodes."""
+    for phase, col in phase_positions.items():
+        header_id = f"header:{phase}"
+        net.add_node(
+            header_id, label=phase.capitalize(), shape="box", color="#372041",
+            borderWidth=3,
+            font={"size": 32, "face": "Arial", "bold": True, "color": "white"},
+            x=col * x_spacing, y=-200, physics=False, fixed=True,
+            widthConstraint={"minimum": 180, "maximum": 220},
+            heightConstraint={"minimum": 60},
+        )
+        if phase in phase_top_nodes:
+            net.add_edge(header_id, phase_top_nodes[phase], color="#000000", width=0.1, hidden=True)
+
+
+def _collect_best_path_edges(best_path):
+    """Collect set of (src_phase, src_tech, tgt_phase, tgt_tech) tuples from best path."""
+    result = set()
+    if not best_path:
+        return result
+    for i in range(len(best_path) - 1):
+        src_phase, src_tech, _, _ = best_path[i]
+        tgt_phase, tgt_tech, _, _ = best_path[i + 1]
+        result.add((src_phase, src_tech, tgt_phase, tgt_tech))
+    return result
+
+
+def _find_best_edges_per_pair(edges):
+    """Find the highest-similarity edge for each phase pair."""
+    best = {}
+    for src_phase, src_tech, tgt_phase, tgt_tech, sim in edges:
+        key = (src_phase, tgt_phase)
+        if key not in best or sim > best[key][2]:
+            best[key] = (src_tech, tgt_tech, sim)
+    return best
+
+
+def _resolve_edge_style(src_phase, src_tech, tgt_phase, tgt_tech, best_path_edges, best_edges):
+    """Determine edge color and width based on path/similarity status."""
+    if (src_phase, src_tech, tgt_phase, tgt_tech) in best_path_edges:
+        return "#ff69b4", 4  # pink for best path
+    pair = best_edges.get((src_phase, tgt_phase))
+    if pair and pair[0] == src_tech and pair[1] == tgt_tech:
+        return "#ffa500", 3  # orange for best similarity
+    return "#bdbdbd", 2  # grey for others
+
+
+def _add_edges(net, edges, best_path_edges, best_edges):
+    """Add all similarity edges to the network with appropriate styling."""
+    for src_phase, src_tech, tgt_phase, tgt_tech, sim in edges:
+        src_id = f"{src_phase}:{src_tech}"
+        tgt_id = f"{tgt_phase}:{tgt_tech}"
+        if src_id not in net.node_ids or tgt_id not in net.node_ids:
+            continue
+        color, width = _resolve_edge_style(src_phase, src_tech, tgt_phase, tgt_tech, best_path_edges, best_edges)
+        net.add_edge(src_id, tgt_id, title=f"Cosine Sim: {sim:.3f}", color=color, width=width, smooth={"type": "continuous"})
+
+
 def visualize_kill_chain_graph(
     predicted_dict, edges, technique_df=None, best_path=None
 ):
@@ -42,145 +139,24 @@ def visualize_kill_chain_graph(
         height="800px",
         width="100%",
         directed=True,
-        bgcolor="#000000",  # black background
+        bgcolor="#000000",
         font_color="white",
     )
 
-    # Phase ordering for layout
     phase_positions = {
-        "recon": 0,
-        "weapon": 1,
-        "delivery": 2,
-        "exploit": 3,
-        "install": 4,
-        "c2": 5,
-        "objectives": 6,
+        "recon": 0, "weapon": 1, "delivery": 2, "exploit": 3,
+        "install": 4, "c2": 5, "objectives": 6,
     }
     x_spacing, y_spacing = 300, 120
 
-    # Map Name → ID for hover tooltips
-    name_to_id = {}
-    if technique_df is not None:
-        if "Name" in technique_df.columns and "ID" in technique_df.columns:
-            name_to_id = {row["Name"]: row["ID"] for _, row in technique_df.iterrows()}
+    name_to_id = _build_name_to_id(technique_df)
+    phase_top_nodes = _add_technique_nodes(net, predicted_dict, phase_positions, name_to_id, x_spacing, y_spacing)
+    _add_header_nodes(net, phase_positions, phase_top_nodes, x_spacing)
 
-    # --- Add technique nodes
-    phase_counts = {}
-    phase_top_nodes = {}
-    for phase, techniques in predicted_dict.items():
-        if not techniques:
-            continue
+    best_path_edges = _collect_best_path_edges(best_path)
+    best_edges = _find_best_edges_per_pair(edges)
+    _add_edges(net, edges, best_path_edges, best_edges)
 
-        x = phase_positions.get(phase, len(phase_positions)) * x_spacing
-        phase_counts[phase] = 0
-
-        # Find the max-prob technique in this phase
-        top_tech, top_prob = max(techniques, key=lambda t: t[1])
-        base_color = _phase_color(phase)
-        light_color = _lighten_color(base_color, factor=0.6)
-
-        for tech_name, score in techniques:
-            y = phase_counts[phase] * y_spacing
-            node_id = f"{phase}:{tech_name}"
-            tech_id = name_to_id.get(tech_name, "N/A")
-
-            title_text = (
-                f"Technique: {tech_name} | Phase: {phase} | "
-                f"Prob: {score:.4f} | ID: {tech_id}"
-            )
-
-            node_color = base_color if tech_name == top_tech else light_color
-
-            net.add_node(
-                node_id,
-                label=tech_name if len(tech_name) <= 28 else tech_name[:25] + "...",
-                title=title_text,
-                color=node_color,
-                x=x,
-                y=y,
-                size=25,
-                physics=False,
-                font={"size": 14, "face": "Arial"},
-            )
-
-            if phase_counts[phase] == 0:
-                phase_top_nodes[phase] = node_id
-
-            phase_counts[phase] += 1
-
-    # --- Add header nodes
-    for phase, col in phase_positions.items():
-        x = col * x_spacing
-        y = -200
-        header_id = f"header:{phase}"
-        net.add_node(
-            header_id,
-            label=phase.capitalize(),
-            shape="box",
-            color="#372041",
-            borderWidth=3,
-            font={"size": 32, "face": "Arial", "bold": True, "color": "white"},
-            x=x,
-            y=y,
-            physics=False,
-            fixed=True,
-            widthConstraint={"minimum": 180, "maximum": 220},
-            heightConstraint={"minimum": 60},
-        )
-        if phase in phase_top_nodes:
-            net.add_edge(
-                header_id,
-                phase_top_nodes[phase],
-                color="#000000",
-                width=0.1,
-                hidden=True,
-            )
-
-    # --- Collect best path edges
-    best_path_edges = set()
-    if best_path:
-        for i in range(len(best_path) - 1):
-            src_phase, src_tech, _, _ = best_path[i]
-            tgt_phase, tgt_tech, _, _ = best_path[i + 1]
-            best_path_edges.add((src_phase, src_tech, tgt_phase, tgt_tech))
-
-    # --- Identify best edges per phase pair
-    best_edges = {}
-    for src_phase, src_tech, tgt_phase, tgt_tech, sim in edges:
-        key = (src_phase, tgt_phase)
-        if key not in best_edges or sim > best_edges[key][2]:
-            best_edges[key] = (src_tech, tgt_tech, sim)
-
-    # --- Add edges
-    for src_phase, src_tech, tgt_phase, tgt_tech, sim in edges:
-        src_id = f"{src_phase}:{src_tech}"
-        tgt_id = f"{tgt_phase}:{tgt_tech}"
-
-        if src_id in net.node_ids and tgt_id in net.node_ids:
-            if (src_phase, src_tech, tgt_phase, tgt_tech) in best_path_edges:
-                color = "#ff69b4"  # pink for best path edges
-                width = 4
-            elif (
-                (src_phase, tgt_phase) in best_edges
-                and best_edges[(src_phase, tgt_phase)][0] == src_tech
-                and best_edges[(src_phase, tgt_phase)][1] == tgt_tech
-            ):
-                color = "#ffa500"  # orange for best similarity edge
-                width = 3
-            else:
-                color = "#bdbdbd"  # grey for others
-                width = 2
-
-            net.add_edge(
-                src_id,
-                tgt_id,
-                title=f"Cosine Sim: {sim:.3f}",
-                color=color,
-                width=width,
-                smooth={"type": "continuous"},
-            )
-
-    # --- Styling
     net.set_options(
         """
         var options = {

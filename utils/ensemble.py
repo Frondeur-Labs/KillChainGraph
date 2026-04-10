@@ -11,6 +11,41 @@ import json
 from pathlib import Path
 
 
+def _find_technique_score(preds: list, tech: str):
+    """Return the score for a technique in a predictions list, or None if absent."""
+    for pred_tech, score in preds:
+        if pred_tech == tech:
+            return score
+    return None
+
+
+def _collect_scores_across_models(phase_predictions: list, tech: str) -> list:
+    """Collect scores for a technique across all models, defaulting to 0.0 if absent."""
+    scores = []
+    for preds in phase_predictions:
+        found = _find_technique_score(preds, tech)
+        scores.append(found if found is not None else 0.0)
+    return scores
+
+
+def _gather_all_techniques(predictions_list: list) -> set:
+    """Gather all unique technique names from a list of prediction lists."""
+    all_techniques = set()
+    for preds in predictions_list:
+        for tech, _ in preds:
+            all_techniques.add(tech)
+    return all_techniques
+
+
+def _calculate_model_accuracies(model_preds_list: list, true_tech: str) -> list:
+    """Calculate top-3 accuracy for each model's predictions against a true technique."""
+    accuracies = []
+    for model_preds in model_preds_list:
+        predicted_techs = [tech for tech, _ in model_preds]
+        accuracies.append(1.0 if true_tech in predicted_techs[:3] else 0.0)
+    return accuracies
+
+
 class EnsembleStrategy(ABC):
     """Abstract base class for ensemble strategies."""
 
@@ -45,18 +80,8 @@ class VotingEnsemble(EnsembleStrategy):
         for i, preds in enumerate(predictions_list):
             weight = weights[i]
             for tech, score in preds:
-                if self.voting_type == "soft":
-                    # Weighted average of probabilities
-                    if tech in technique_scores:
-                        technique_scores[tech] += score * weight
-                    else:
-                        technique_scores[tech] = score * weight
-                else:  # hard voting
-                    # Each model votes for its top technique
-                    if tech in technique_scores:
-                        technique_scores[tech] += weight
-                    else:
-                        technique_scores[tech] = weight
+                contribution = score * weight if self.voting_type == "soft" else weight
+                technique_scores[tech] = technique_scores.get(tech, 0) + contribution
 
         # Sort by combined score and return top results
         sorted_techniques = sorted(technique_scores.items(), key=lambda x: x[1], reverse=True)
@@ -75,11 +100,7 @@ class WeightedAveragingEnsemble(EnsembleStrategy):
         else:
             weights = np.array(weights) / np.sum(weights)
 
-        # Collect all techniques
-        all_techniques = set()
-        for preds in predictions_list:
-            for tech, _ in preds:
-                all_techniques.add(tech)
+        all_techniques = _gather_all_techniques(predictions_list)
 
         # Weighted average for each technique
         technique_scores = {}
@@ -88,13 +109,10 @@ class WeightedAveragingEnsemble(EnsembleStrategy):
             total_weight = 0.0
 
             for i, preds in enumerate(predictions_list):
-                weight = weights[i]
-                # Find this technique in the predictions
-                for pred_tech, score in preds:
-                    if pred_tech == tech:
-                        total_weighted_score += score * weight
-                        total_weight += weight
-                        break
+                score = _find_technique_score(preds, tech)
+                if score is not None:
+                    total_weighted_score += score * weights[i]
+                    total_weight += weights[i]
 
             if total_weight > 0:
                 technique_scores[tech] = total_weighted_score / total_weight
@@ -125,7 +143,7 @@ class StackingEnsemble(EnsembleStrategy):
             fallback = WeightedAveragingEnsemble()
             return fallback.combine_predictions(predictions_list, weights)
 
-        # TODO: Implement full stacking with meta-model training
+        # Meta-model stacking not yet implemented; fall back to weighted averaging
         return WeightedAveragingEnsemble().combine_predictions(predictions_list, weights)
 
 
@@ -186,7 +204,7 @@ class EnsemblePredictor:
             ensemble_predictions[phase] = self.predict_phase(predictions_list, phase)
         return ensemble_predictions
 
-    def get_uncertainty_estimate(self, phase_predictions: List[List[Tuple[str, float]]], phase_name: str = None) -> float:
+    def get_uncertainty_estimate(self, phase_predictions: List[List[Tuple[str, float]]]) -> float:
         """
         Estimate uncertainty of ensemble predictions.
 
@@ -196,26 +214,14 @@ class EnsemblePredictor:
         if not phase_predictions or len(phase_predictions) < 2:
             return 1.0  # High uncertainty for single/few models
 
-        all_techniques = set()
-        for preds in phase_predictions:
-            for tech, _ in preds:
-                all_techniques.add(tech)
+        all_techniques = _gather_all_techniques(phase_predictions)
 
         # Calculate variance in scores across models for each technique
         technique_variances = []
         for tech in all_techniques:
-            scores = []
-            for preds in phase_predictions:
-                for pred_tech, score in preds:
-                    if pred_tech == tech:
-                        scores.append(score)
-                        break
-                else:
-                    scores.append(0.0)  # Not predicted
-
+            scores = _collect_scores_across_models(phase_predictions, tech)
             if len(scores) > 1:
-                variance = np.var(scores)
-                technique_variances.append(variance)
+                technique_variances.append(np.var(scores))
 
         if not technique_variances:
             return 1.0
@@ -252,19 +258,11 @@ class EnsemblePredictor:
             weights = self.config['phase_weights'].get(phase, [1.0] * num_models)
 
             if phase in true_labels:
-                true_tech = true_labels[phase]
-
-                # Calculate accuracy contribution for each model
-                model_accuracies = []
-                for model_preds in model_preds_list:
-                    # Check if true technique is in top predictions
-                    predicted_techs = [tech for tech, _ in model_preds]
-                    accuracy = 1.0 if true_tech in predicted_techs[:3] else 0.0  # Top-3 accuracy
-                    model_accuracies.append(accuracy)
+                model_accuracies = _calculate_model_accuracies(model_preds_list, true_labels[phase])
 
                 # Update weights based on accuracy
                 for i, acc in enumerate(model_accuracies):
-                    weights[i] = weights[i] * (1 + alpha * (acc - 0.5))  # Reward accuracy
+                    weights[i] = weights[i] * (1 + alpha * (acc - 0.5))
 
                 # Normalize weights
                 total_weight = sum(weights)
@@ -287,6 +285,36 @@ def create_weighted_ensemble() -> EnsemblePredictor:
 def create_stacking_ensemble(meta_model=None) -> EnsemblePredictor:
     """Create stacking ensemble predictor."""
     return EnsemblePredictor(StackingEnsemble(meta_model))
+
+
+def _check_top3_accuracy(preds: dict, phase: str, true_tech: str) -> Optional[float]:
+    """Return 1.0 if true_tech is in top-3 predictions for phase, 0.0 if not, None if phase absent."""
+    if phase not in preds:
+        return None
+    top_techs = [tech for tech, _ in preds[phase][:3]]
+    return 1.0 if true_tech in top_techs else 0.0
+
+
+def _compute_phase_metrics(single_accuracy: dict, ensemble_accuracy: dict, phases) -> Dict:
+    """Compute per-phase and overall metrics from accuracy lists."""
+    metrics = {}
+    for phase in phases:
+        single_acc = np.mean(single_accuracy[phase]) if single_accuracy[phase] else 0.0
+        ensemble_acc = np.mean(ensemble_accuracy[phase]) if ensemble_accuracy[phase] else 0.0
+        metrics[phase] = {
+            'single_model_accuracy': single_acc,
+            'ensemble_accuracy': ensemble_acc,
+            'improvement': ensemble_acc - single_acc,
+        }
+
+    overall_single = np.mean([m['single_model_accuracy'] for m in metrics.values()])
+    overall_ensemble = np.mean([m['ensemble_accuracy'] for m in metrics.values()])
+    metrics['overall'] = {
+        'single_model_accuracy': overall_single,
+        'ensemble_accuracy': overall_ensemble,
+        'improvement': overall_ensemble - overall_single,
+    }
+    return metrics
 
 
 def evaluate_ensemble_performance(test_data: List[Tuple[str, Dict[str, str]]],
@@ -314,46 +342,21 @@ def evaluate_ensemble_performance(test_data: List[Tuple[str, Dict[str, str]]],
     ensemble_accuracy = {phase: [] for phase in ensemble_models.keys()}
 
     for attack_text, true_techniques in test_data:
-        # Single model predictions
         single_preds = run_kill_chain_prediction(attack_text, single_models, sentence_model, k=10)
-
-        # Ensemble predictions
         ensemble_preds = run_ensemble_kill_chain_prediction(
             attack_text, ensemble_models, sentence_model, ensemble_predictor, k=10
         )
 
-        # Calculate accuracies
         for phase, true_tech in true_techniques.items():
-            if phase in single_preds:
-                single_techs = [tech for tech, _ in single_preds[phase][:3]]  # Top-3
-                single_accuracy[phase].append(1.0 if true_tech in single_techs else 0.0)
+            single_acc = _check_top3_accuracy(single_preds, phase, true_tech)
+            if single_acc is not None:
+                single_accuracy[phase].append(single_acc)
 
-            if phase in ensemble_preds:
-                ensemble_techs = [tech for tech, _ in ensemble_preds[phase][:3]]
-                ensemble_accuracy[phase].append(1.0 if true_tech in ensemble_techs else 0.0)
+            ensemble_acc = _check_top3_accuracy(ensemble_preds, phase, true_tech)
+            if ensemble_acc is not None:
+                ensemble_accuracy[phase].append(ensemble_acc)
 
-    # Calculate averages
-    metrics = {}
-    for phase in single_models.keys():
-        single_acc = np.mean(single_accuracy[phase]) if single_accuracy[phase] else 0.0
-        ensemble_acc = np.mean(ensemble_accuracy[phase]) if ensemble_accuracy[phase] else 0.0
-
-        metrics[phase] = {
-            'single_model_accuracy': single_acc,
-            'ensemble_accuracy': ensemble_acc,
-            'improvement': ensemble_acc - single_acc
-        }
-
-    overall_single = np.mean([m['single_model_accuracy'] for m in metrics.values()])
-    overall_ensemble = np.mean([m['ensemble_accuracy'] for m in metrics.values()])
-
-    metrics['overall'] = {
-        'single_model_accuracy': overall_single,
-        'ensemble_accuracy': overall_ensemble,
-        'improvement': overall_ensemble - overall_single
-    }
-
-    return metrics
+    return _compute_phase_metrics(single_accuracy, ensemble_accuracy, single_models.keys())
 
 
 if __name__ == "__main__":

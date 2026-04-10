@@ -7,6 +7,34 @@ import pandas as pd
 import html as _html
 
 
+def _walk_phases(phase_order, adjacency, used_per_phase, name_to_id, start_tech, start_prob):
+    """Walk through phases starting from a recon technique, returning (score, stack) or None."""
+    stack = [("recon", start_tech, start_prob, name_to_id.get(start_tech, None))]
+    score = start_prob
+    current_tech = start_tech
+
+    for i in range(len(phase_order) - 1):
+        src, tgt = phase_order[i], phase_order[i + 1]
+        options = adjacency.get((src, current_tech), [])
+        if not options:
+            return None
+
+        # filter out techniques already used in this phase
+        options = [o for o in options if o[1] not in used_per_phase[tgt]]
+        if not options:
+            return None
+
+        # pick best among remaining
+        tgt_phase, tgt_tech, sim = max(options, key=lambda x: x[2])
+        stack.append((tgt_phase, tgt_tech, sim, name_to_id.get(tgt_tech, None)))
+        score += sim
+        current_tech = tgt_tech
+
+    if stack[-1][0] != "objectives":
+        return None
+    return score, stack
+
+
 def build_paths_from_edges(predicted_dict, edges, technique_df=None, top_k=10):
     """
     Build diverse paths along semantic edges, ensuring each path
@@ -44,32 +72,9 @@ def build_paths_from_edges(predicted_dict, edges, technique_df=None, top_k=10):
         if len(final_paths) >= top_k:
             break
 
-        stack = [("recon", recon_tech, recon_prob, name_to_id.get(recon_tech, None))]
-        score = recon_prob
-        current_phase, current_tech = "recon", recon_tech
-        valid = True
-
-        for i in range(len(phase_order) - 1):
-            src, tgt = phase_order[i], phase_order[i + 1]
-            options = adjacency.get((src, current_tech), [])
-            if not options:
-                valid = False
-                break
-
-            # filter out techniques already used in this phase
-            options = [o for o in options if o[1] not in used_per_phase[tgt]]
-
-            if not options:
-                valid = False
-                break
-
-            # pick best among remaining
-            tgt_phase, tgt_tech, sim = max(options, key=lambda x: x[2])
-            stack.append((tgt_phase, tgt_tech, sim, name_to_id.get(tgt_tech, None)))
-            score += sim
-            current_phase, current_tech = tgt_phase, tgt_tech
-
-        if valid and stack[-1][0] == "objectives":
+        result = _walk_phases(phase_order, adjacency, used_per_phase, name_to_id, recon_tech, recon_prob)
+        if result is not None:
+            score, stack = result
             final_paths.append((score, stack))
             # Mark techniques as used
             for phase, tech, _, _ in stack:
@@ -89,7 +94,7 @@ PHASE_COLORS = {
 }
 
 
-def render_paths_cards(paths, total_complete, max_cols=2):
+def render_paths_cards(paths, max_cols=2):
     """
     Render paths as inline cards.
     `paths` = [(score, [(phase, tech, _, tech_id), ...]), ...]
@@ -104,13 +109,6 @@ def render_paths_cards(paths, total_complete, max_cols=2):
     for i, (score, path) in enumerate(paths):
         col = cols[i % max_cols]
         with col:
-            chain_text = " → ".join(
-                [
-                    f"{phase}:{tech} ({tid})" if tid else f"{phase}:{tech}"
-                    for phase, tech, _, tid in path
-                ]
-            )
-
             # Build rows for phases/techniques
             node_rows = []
             for phase, tech, _, tid in path:
@@ -130,7 +128,6 @@ def render_paths_cards(paths, total_complete, max_cols=2):
                 )
 
             nodes_html = "".join(node_rows)
-            safe_chain = _html.escape(chain_text).replace('"', "&quot;")
 
             card_html = (
                 f"<div style='background:#111; border-radius:10px; padding:12px; "

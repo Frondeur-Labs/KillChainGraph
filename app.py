@@ -138,17 +138,6 @@ if st.button("Run Prediction and Mapping"):
                     attack_input, phase_models, sentence_model, k=10
                 )
 
-        # st.success("✅ Technique prediction completed.")
-        # st.subheader("📋 Top Predicted Techniques per Phase")
-
-        # name_to_id = {row["Name"]: row["ID"] for _, row in technique_df.iterrows()}
-
-        # for phase, techniques in predicted_techniques.items():
-        #     st.markdown(f"### 🔹 {phase.capitalize()}")
-        #     for tech_name, score in techniques:
-        #         tech_id = name_to_id.get(tech_name, "❓ Unknown ID")
-        #         st.markdown(f"- **{tech_name}** (`{tech_id}`): `{score:.4f}`")
-
         st.success("✅ Technique prediction completed.")
         st.subheader("📋 Top Predicted Techniques per Phase")
 
@@ -248,17 +237,5 @@ if st.button("Run Prediction and Mapping"):
         # 5. Build kill chain paths
         # -------------------------
 
-        # st.subheader(f"🛤️ Top {len(paths)} Predicted Kill Chain Paths ")
-
-        # with st.expander("🛤️ Paths"):
-        #     for idx, (score, path) in enumerate(paths, 1):
-        #         chain = " → ".join(
-        #             [
-        #                 f"{phase}:{tech} ({tech_id})" if tech_id else f"{phase}:{tech}"
-        #                 for phase, tech, _, tech_id in path
-        #             ]
-        #         )
-        #         st.markdown(f"**Path {idx}** | Score={score:.4f}  \n{chain}")
-
         with st.expander("🛤️ Paths", expanded=True):
-            render_paths_cards(paths, total_complete, max_cols=2)
+            render_paths_cards(paths, max_cols=2)
